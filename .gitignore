@@ -17,3 +17,4 @@ mono_crash.*.json
 *~
 *.swp
 Thumbs.db
+/android/
