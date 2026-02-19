@@ -22,6 +22,9 @@ extends CharacterBody2D
 # Tamaño de la hitbox del jugador (debe ser menor que tile_size)
 @export var hitbox_size: Vector2 = Vector2(26, 26)
 
+# Distancia de prueba para detectar colisiones en el input buffer
+@export var collision_test_distance: float = 2.0
+
 # ========================================
 # VARIABLES INTERNAS
 # ========================================
@@ -51,6 +54,10 @@ func setup_collision_shape():
 		var shape = collision_shape.shape
 		if shape is RectangleShape2D:
 			shape.size = hitbox_size
+		else:
+			push_warning("CollisionShape2D no tiene un RectangleShape2D. No se pudo configurar la hitbox.")
+	else:
+		push_warning("No se encontró CollisionShape2D en el jugador. No se pudo configurar la hitbox.")
 
 # ========================================
 # FÍSICA Y MOVIMIENTO
@@ -73,7 +80,7 @@ func _physics_process(delta: float):
 	move_and_slide()
 	
 	# Aplicar magnetismo hacia el centro del tile
-	apply_tile_snapping(movement_direction, delta)
+	apply_tile_snapping(movement_direction)
 	
 	# Actualizar la última dirección si se está moviendo
 	if movement_direction.length() > 0:
@@ -120,27 +127,37 @@ func can_move_in_direction(direction: Vector2) -> bool:
 	# Hacer un test de colisión pequeño en la dirección deseada
 	var test_motion_params = PhysicsTestMotionParameters2D.new()
 	test_motion_params.from = global_transform
-	test_motion_params.motion = direction * 2.0  # Pequeño movimiento de prueba
+	test_motion_params.motion = direction * collision_test_distance
 	
 	var result = PhysicsTestMotionResult2D.new()
 	return not PhysicsServer2D.body_test_motion(get_rid(), test_motion_params, result)
 
-func apply_tile_snapping(movement_direction: Vector2, delta: float):
+func apply_tile_snapping(movement_direction: Vector2):
 	# Solo aplicar magnetismo si nos estamos moviendo
 	if movement_direction.length() == 0:
 		return
 	
-	# Si nos movemos horizontalmente, corregir la posición Y hacia el centro del tile
-	if abs(movement_direction.x) > abs(movement_direction.y):
-		apply_axis_snapping(false)  # false = eje Y
+	var abs_x = abs(movement_direction.x)
+	var abs_y = abs(movement_direction.y)
 	
-	# Si nos movemos verticalmente, corregir la posición X hacia el centro del tile
-	if abs(movement_direction.y) > abs(movement_direction.x):
-		apply_axis_snapping(true)  # true = eje X
+	# Si nos movemos horizontalmente (o diagonal con más componente horizontal), corregir Y
+	if abs_x > abs_y:
+		apply_axis_snapping(false)  # false = corregir eje Y
+	# Si nos movemos verticalmente (o diagonal con más componente vertical), corregir X
+	elif abs_y > abs_x:
+		apply_axis_snapping(true)  # true = corregir eje X
+	# Si el movimiento es exactamente diagonal (caso raro), corregir ambos ejes
+	else:
+		apply_axis_snapping(true)
+		apply_axis_snapping(false)
 
-func apply_axis_snapping(is_x_axis: bool):
+func apply_axis_snapping(snap_x_axis: bool):
+	# Parámetro: snap_x_axis
+	# - true: corregir la posición X hacia el centro del tile
+	# - false: corregir la posición Y hacia el centro del tile
+	
 	# Obtener la posición actual en el eje a corregir
-	var current_pos = position.x if is_x_axis else position.y
+	var current_pos = position.x if snap_x_axis else position.y
 	
 	# Calcular el centro del tile más cercano
 	var tile_center = round(current_pos / tile_size) * tile_size
@@ -156,7 +173,7 @@ func apply_axis_snapping(is_x_axis: bool):
 	var correction = (tile_center - current_pos) * snap_strength
 	
 	# Aplicar la corrección
-	if is_x_axis:
+	if snap_x_axis:
 		position.x += correction
 	else:
 		position.y += correction
