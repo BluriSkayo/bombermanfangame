@@ -232,8 +232,8 @@ animations = [{
 "speed": 5.0
 }]
 
-[sub_resource type="RectangleShape2D" id="RectangleShape2D_epypp"]
-size = Vector2(10, 10)
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_7vxoj"]
+size = Vector2(12, 12)
 
 [node name="World" type="Node2D" unique_id=1749110876]
 position = Vector2(6, 4)
@@ -244,19 +244,18 @@ tile_map_data = PackedByteArray("AAAAAAAAAAAAAAAAAAAAAAEAAAABAAAAAAABAAAAAAAAAAA
 tile_set = SubResource("TileSet_q6r6c")
 
 [node name="Player" type="CharacterBody2D" parent="." unique_id=385523070]
-position = Vector2(-163, -91)
+position = Vector2(-165, -89)
 script = ExtResource("1_0e48y")
 
 [node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="Player" unique_id=1661248513]
-position = Vector2(0.52156067, -4.5)
+position = Vector2(2.5, -6.5)
 sprite_frames = SubResource("SpriteFrames_fs4d3")
 animation = &"idle_down"
 frame_progress = 0.960292
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="Player" unique_id=494426392]
-position = Vector2(0, 4.979004)
-shape = SubResource("RectangleShape2D_epypp")
+position = Vector2(2, 2)
+shape = SubResource("RectangleShape2D_7vxoj")
 
 [node name="Camera2D" type="Camera2D" parent="Player" unique_id=285820334]
-position = Vector2(-16, -9.97007)
 zoom = Vector2(3, 3)

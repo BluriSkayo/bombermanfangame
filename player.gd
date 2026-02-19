@@ -1,212 +1,187 @@
 extends CharacterBody2D
 
-# ========================================
-# VARIABLES EXPORTADAS (configurables)
-# ========================================
-
 # Velocidad del personaje
-@export var speed = 150.0
+@export var speed: float = 120.0
 
-# Tamaño del tile (para el magnetismo hacia el centro)
-@export var tile_size: float = 32.0
+# Tamaño del tile (debe coincidir con tu TileMap)
+@export var tile_size: float = 16.0
 
-# Fuerza del magnetismo hacia el centro del tile (0 = sin magnetismo, 1 = muy fuerte)
-@export_range(0.0, 1.0) var snap_strength: float = 0.2
+# Tiempo máximo para recordar el input secundario (el toque breve)
+@export var intent_buffer_time: float = 0.15
 
-# Tolerancia de alineación - si está más cerca que esto, no aplicar magnetismo
-@export var alignment_tolerance: float = 8.0
+# Tiempo máximo que dura la corrección automática
+@export var correction_duration: float = 0.12
 
-# Tiempo que se recuerda un input bloqueado (input forgiveness)
-@export var input_buffer_time: float = 0.15
+# Distancia máxima para corregir cuando estás bloqueado (en px)
+@export var blocked_snap_threshold: float = 7.0
 
-# Tamaño de la hitbox del jugador (debe ser menor que tile_size)
-@export var hitbox_size: Vector2 = Vector2(26, 26)
-
-# Distancia de prueba para detectar colisiones en el input buffer
-@export var collision_test_distance: float = 2.0
-
-# ========================================
-# VARIABLES INTERNAS
-# ========================================
+# Fuerza de corrección cuando estás bloqueado
+@export_range(0.0, 1.0) var blocked_snap_strength: float = 0.15
 
 # Referencia al AnimatedSprite2D
 @onready var animated_sprite = $AnimatedSprite2D
 
-# Variable para recordar la última dirección
-var last_direction = Vector2.DOWN  # Empieza mirando abajo
+# Última dirección para las animaciones idle
+var last_direction: Vector2 = Vector2.DOWN
 
-# Buffer de input: almacena la dirección que el jugador quiso tomar pero estaba bloqueado
-var buffered_input: Vector2 = Vector2.ZERO
-var buffer_timer: float = 0.0
+# Sistema de intención de giro
+var intent_direction: Vector2 = Vector2.ZERO
+var intent_timer: float = 0.0
+var intent_target: float = 0.0
+var intent_axis: String = ""
+var is_correcting: bool = false
+var correction_timer: float = 0.0
 
-# ========================================
-# FUNCIONES DE INICIALIZACIÓN
-# ========================================
+# Sub-píxel para movimiento en píxeles enteros
+var sub_pixel: Vector2 = Vector2.ZERO
 
-func _ready():
-	# Configurar la hitbox automáticamente
-	setup_collision_shape()
-
-func setup_collision_shape():
-	# Buscar el CollisionShape2D hijo y configurar su tamaño
-	var collision_shape = get_node_or_null("CollisionShape2D")
-	if collision_shape and collision_shape is CollisionShape2D:
-		var shape = collision_shape.shape
-		if shape is RectangleShape2D:
-			shape.size = hitbox_size
-		else:
-			push_warning("CollisionShape2D no tiene un RectangleShape2D. No se pudo configurar la hitbox.")
-	else:
-		push_warning("No se encontró CollisionShape2D en el jugador. No se pudo configurar la hitbox.")
-
-# ========================================
-# FÍSICA Y MOVIMIENTO
-# ========================================
-
-func _physics_process(delta: float):
-	# Obtener la dirección del input del jugador
-	var input_direction = get_input_direction()
-	
-	# Gestionar el buffer de input
-	handle_input_buffer(input_direction, delta)
-	
-	# Determinar la dirección de movimiento (puede ser del input o del buffer)
-	var movement_direction = get_movement_direction(input_direction)
-	
-	# Aplicar velocidad
-	velocity = movement_direction * speed
-	
-	# Mover el personaje
-	move_and_slide()
-	
-	# Aplicar magnetismo hacia el centro del tile
-	apply_tile_snapping(movement_direction)
-	
-	# Actualizar la última dirección si se está moviendo
-	if movement_direction.length() > 0:
-		last_direction = movement_direction
-	
-	# Actualizar animaciones
-	update_animation(movement_direction)
-
-func get_input_direction() -> Vector2:
-	# Obtener input del jugador en los 4 ejes
-	var direction = Vector2.ZERO
+func _physics_process(delta: float) -> void:
+	var direction: Vector2 = Vector2.ZERO
 	direction.x = Input.get_axis("ui_left", "ui_right")
 	direction.y = Input.get_axis("ui_up", "ui_down")
 	
-	# Normalizar la dirección para evitar movimiento más rápido en diagonal
+	detect_intent(direction, delta)
+	
+	if is_correcting:
+		apply_correction(direction, delta)
+	
 	if direction.length() > 0:
 		direction = direction.normalized()
+		last_direction = direction
 	
-	return direction
-
-func handle_input_buffer(input_direction: Vector2, delta: float):
-	# Si hay input del jugador, guardarlo en el buffer
-	if input_direction.length() > 0:
-		buffered_input = input_direction
-		buffer_timer = input_buffer_time
-	else:
-		# Decrementar el timer del buffer
-		buffer_timer = max(0.0, buffer_timer - delta)
-
-func get_movement_direction(input_direction: Vector2) -> Vector2:
-	# Si hay input directo, usarlo
-	if input_direction.length() > 0:
-		return input_direction
+	# Guardar posición antes de mover
+	var pos_before: Vector2 = position
 	
-	# Si no hay input pero hay un input en el buffer, intentar usarlo
-	if buffer_timer > 0 and buffered_input.length() > 0:
-		# Verificar si ahora es posible moverse en la dirección del buffer
-		if can_move_in_direction(buffered_input):
-			return buffered_input
+	# Acumular movimiento con sub-píxeles
+	sub_pixel += direction * speed * delta
 	
-	return Vector2.ZERO
-
-func can_move_in_direction(direction: Vector2) -> bool:
-	# Hacer un test de colisión pequeño en la dirección deseada
-	var test_motion_params = PhysicsTestMotionParameters2D.new()
-	test_motion_params.from = global_transform
-	test_motion_params.motion = direction * collision_test_distance
+	# Extraer solo los píxeles enteros
+	var move: Vector2 = Vector2(int(sub_pixel.x), int(sub_pixel.y))
+	sub_pixel -= move
 	
-	var result = PhysicsTestMotionResult2D.new()
-	return not PhysicsServer2D.body_test_motion(get_rid(), test_motion_params, result)
+	velocity = move / delta
+	move_and_slide()
+	
+	# Si está bloqueado y NO está en corrección de intención, intentar snap
+	if not is_correcting and direction != Vector2.ZERO:
+		try_blocked_snap(direction, pos_before)
+	
+	update_animation(direction)
 
-func apply_tile_snapping(movement_direction: Vector2):
-	# Solo aplicar magnetismo si nos estamos moviendo
-	if movement_direction.length() == 0:
+func try_blocked_snap(direction: Vector2, pos_before: Vector2) -> void:
+	var stuck_x: bool = direction.x != 0 and abs(position.x - pos_before.x) < 0.5
+	var stuck_y: bool = direction.y != 0 and abs(position.y - pos_before.y) < 0.5
+	
+	# Si se mueve horizontal pero está atascado, corregir Y si está cerca del centro
+	if direction.x != 0 and direction.y == 0 and stuck_x:
+		var target_y: float = round(position.y / tile_size) * tile_size
+		var dist: float = abs(position.y - target_y)
+		if dist > 1.0 and dist < blocked_snap_threshold:
+			position.y = lerp(position.y, target_y, blocked_snap_strength)
+			position.y = round(position.y)
+	
+	# Si se mueve vertical pero está atascado, corregir X si está cerca del centro
+	if direction.y != 0 and direction.x == 0 and stuck_y:
+		var target_x: float = round(position.x / tile_size) * tile_size
+		var dist: float = abs(position.x - target_x)
+		if dist > 1.0 and dist < blocked_snap_threshold:
+			position.x = lerp(position.x, target_x, blocked_snap_strength)
+			position.x = round(position.x)
+
+func detect_intent(direction: Vector2, delta: float) -> void:
+	if direction.x != 0 and direction.y != 0:
+		intent_direction = direction
+		intent_timer = intent_buffer_time
+		is_correcting = false
 		return
 	
-	var abs_x = abs(movement_direction.x)
-	var abs_y = abs(movement_direction.y)
+	if intent_timer > 0 and not is_correcting:
+		intent_timer -= delta
+		
+		if direction.x != 0 and direction.y == 0:
+			if intent_direction.y != 0:
+				intent_target = round(position.y / tile_size) * tile_size + sign(intent_direction.y) * 8.0
+				intent_axis = "y"
+				is_correcting = true
+				correction_timer = correction_duration
+				intent_timer = 0.0
+		
+		elif direction.y != 0 and direction.x == 0:
+			if intent_direction.x != 0:
+				intent_target = round(position.x / tile_size) * tile_size + sign(intent_direction.x) * 8.0
+				intent_axis = "x"
+				is_correcting = true
+				correction_timer = correction_duration
+				intent_timer = 0.0
 	
-	# Si nos movemos horizontalmente (o diagonal con más componente horizontal), corregir Y
-	if abs_x > abs_y:
-		apply_axis_snapping(false)  # false = corregir eje Y
-	# Si nos movemos verticalmente (o diagonal con más componente vertical), corregir X
-	elif abs_y > abs_x:
-		apply_axis_snapping(true)  # true = corregir eje X
-	# Si el movimiento es exactamente diagonal (caso raro), corregir ambos ejes
-	else:
-		apply_axis_snapping(true)
-		apply_axis_snapping(false)
+	if direction == Vector2.ZERO:
+		cancel_correction()
 
-func apply_axis_snapping(snap_x_axis: bool):
-	# Parámetro: snap_x_axis
-	# - true: corregir la posición X hacia el centro del tile
-	# - false: corregir la posición Y hacia el centro del tile
-	
-	# Obtener la posición actual en el eje a corregir
-	var current_pos = position.x if snap_x_axis else position.y
-	
-	# Calcular el centro del tile más cercano
-	var tile_center = round(current_pos / tile_size) * tile_size
-	
-	# Calcular la distancia al centro
-	var distance_to_center = abs(current_pos - tile_center)
-	
-	# Si estamos lo suficientemente cerca, no aplicar corrección (para evitar vibraciones)
-	if distance_to_center < alignment_tolerance:
+func apply_correction(direction: Vector2, delta: float) -> void:
+	correction_timer -= delta
+	if correction_timer <= 0:
+		cancel_correction()
 		return
 	
-	# Calcular la corrección a aplicar
-	var correction = (tile_center - current_pos) * snap_strength
+	var current: float
+	var diff: float
 	
-	# Aplicar la corrección
-	if snap_x_axis:
-		position.x += correction
-	else:
-		position.y += correction
+	if intent_axis == "x":
+		current = position.x
+		diff = intent_target - current
+		
+		if abs(diff) < 2.0:
+			position.x = intent_target
+			cancel_correction()
+			return
+		
+		position.x += sign(diff) * speed * delta * 0.5
+		position.x = round(position.x)
+		
+		if direction.y == 0:
+			cancel_correction()
+	
+	elif intent_axis == "y":
+		current = position.y
+		diff = intent_target - current
+		
+		if abs(diff) < 2.0:
+			position.y = intent_target
+			cancel_correction()
+			return
+		
+		position.y += sign(diff) * speed * delta * 0.5
+		position.y = round(position.y)
+		
+		if direction.x == 0:
+			cancel_correction()
 
-# ========================================
-# ANIMACIONES
-# ========================================
+func cancel_correction() -> void:
+	is_correcting = false
+	intent_direction = Vector2.ZERO
+	intent_timer = 0.0
+	intent_axis = ""
+	correction_timer = 0.0
 
-func update_animation(direction: Vector2):
+func update_animation(direction: Vector2) -> void:
 	if direction.length() == 0:
-		# Si no se mueve, usar idle según la última dirección
 		if abs(last_direction.x) > abs(last_direction.y):
-			# Última dirección fue horizontal
 			if last_direction.x > 0:
 				animated_sprite.play("idle_right")
 			else:
 				animated_sprite.play("idle_left")
 		else:
-			# Última dirección fue vertical
 			if last_direction.y > 0:
 				animated_sprite.play("idle_down")
 			else:
 				animated_sprite.play("idle_up")
 	else:
-		# Si se está moviendo, usar animación de caminar
 		if abs(direction.x) > abs(direction.y):
-			# Movimiento horizontal
 			if direction.x > 0:
 				animated_sprite.play("walk_right")
 			else:
 				animated_sprite.play("walk_left")
 		else:
-			# Movimiento vertical
 			if direction.y > 0:
 				animated_sprite.play("walk_down")
 			else:
